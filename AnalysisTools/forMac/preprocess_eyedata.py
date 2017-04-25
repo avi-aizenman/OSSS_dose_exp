@@ -16,6 +16,7 @@ annulus_radius_x = 101
 annulus_radius_y = 103
 
 
+
 def dfScatter(df, xcol, ycol, catcol):  # def = defines function
     ''' This function plots a scatter plot of a dataframe where each category is plotted with a different color'''
 
@@ -39,15 +40,15 @@ if __name__ == "__main__":
 
     if not os.path.isdir(sub_folder):
         #print("{} is not a valid directory!".format(sub_folder))
-        sys.exit()
+        sys.exit('invalid dir %s' % sub_folder)
 
-    if not os.path.exists(os.path.dirname(sub_folder + '/proccessed/')):
+    if not os.path.exists(os.path.dirname(sub_folder + '/processed/')):
         #print('making directory')
-        os.makedirs(os.path.dirname(sub_folder + '/proccessed/'))
-    dataFrameSaved = pd.ExcelWriter(sub_folder + '/proccessed/' + current_subject +
+        os.makedirs(os.path.dirname(sub_folder + '/processed/'))
+    dataFrameSaved = pd.ExcelWriter(sub_folder + '/processed/' + current_subject +
                                     '_' + date + '_session' + session + '_master_file.xlsx', engine='xlsxwriter')
 
-    for fn in os.listdir(sub_folder):
+    for i, fn in enumerate(os.listdir(sub_folder)):
         eye_track = ''
         if fn.endswith('.csv') == True:
             # now we check the eyetrack file for marked trials that break fixation
@@ -62,7 +63,7 @@ if __name__ == "__main__":
             # Read in out data
             data = pd.read_csv(sub_folder + '/' + fn)
             final_col = ['trial', 'time', 'x', 'y', 'In_Bound', 'Stimuli_On',
-                         'Out_Bounds_stim_On', 'Blink']  # 11/28 removed: , 'Out_bounds_Stim_On'
+                         'Out_Bounds_stim_On', 'Blink','Saccade']  # 11/28 removed: , 'Out_bounds_Stim_On'
             df_data = pd.DataFrame([], columns=final_col)  # empty frame
 
             temp_columns = ['time', 'x', 'y',
@@ -76,11 +77,19 @@ if __name__ == "__main__":
             flag = 0
 
             stimuli_on = 0
+            saccadeStatus= 0
             in_blink = False
             saccade = False
             hold_blink = False
             current_time = 0
             collect_sacc = []
+            start_sacc = 0
+            end_sacc = 0
+            flagSac = 0
+            start_sacctotal = []
+            end_sacctotal = []
+            blinkStatus = 0
+            saccStatus = 0
 
             # Need to come up with a better way to do this, but
             for index, row in data.iterrows():  # we are iterating through the whole data frame
@@ -94,12 +103,14 @@ if __name__ == "__main__":
                     # handle what kind of string we have
 
                     if row['time'] == 'MSG':  # check to see if we have a time point or a message
-
                         # note: 9 is the number of characters from the start of
                         # string to any relevant information
-                        if row['x'][9:16] == 'TRIALID':
+                        #print row
 
-                            trial = (row['x'][17:])
+                        #if row['x'][8:15] == 'TRIALID':
+                        if 'TRIALID' in str(row):
+                            trial = str(row['x']).split("TRIALID",1)[1]
+
 
                         # if we're given a trial ID change trial to match
 
@@ -112,25 +123,33 @@ if __name__ == "__main__":
 
                         elif row['x'][-12:] == 'END_STIMULUS':
                             stimuli_on = 0
-
+                    # aside from processing start and end of saccades and blinks,
+                    # keeps track of which saccades include blinks
                     if row['time'][:6] == 'SBLINK':
                         in_blink = True
                         hold_blink = True
-
+                        if saccadeStatus == 1:
+                            flagSac = 1
                     elif row['time'][:6] == 'EBLINK':
                         in_blink = False
-                        saccade = False
-
-                    if row['time'][:5] == 'SSACC':
+                    elif row['time'][:5] == 'SSACC':
+                        saccStatus = 1
                         saccade = True
-                        collect_sacc.append(row['time'][-8:])
-
+                        saccadeStatus = 1
+                        start_sacc = (row['time'][8:])
                     elif row['time'][:5] == 'ESACC':
-                        if hold_blink == True:
-                            # then saccade was due to a blink
-                            blinked_time = blinked_time + collect_sacc
+                        saccStatus = 0
+                        end_sacc = (row['x'][-8:])
                         saccade = False
+                        saccadeStatus = 0
                         collect_sacc = []
+                        # collects saccades that contain blinks
+                        if flagSac == 1:
+                            start_sacctotal.append(start_sacc)
+                            end_sacctotal.append(end_sacc)
+                            flagSac = 0
+
+
 
                 else:  # row['time'] has a string of digits, so we're looking at a time-point
                     # check to see if the eye is in bounds of fixation
@@ -155,31 +174,31 @@ if __name__ == "__main__":
                         if stimuli_on and marked:
                             flag = 1
                         current_row = pd.DataFrame({'trial': [trial], 'time': [row['time']], 'x': [row['x']], 'y': row['y'],
-                                                    'In_Bound': [marked], 'Stimuli_On': [stimuli_on], 'Out_Bounds_stim_On': [flag], 'Blink': [0]}, index=[0])  # 11/28; removed: 'Out_bounds_Stim_On':[flag]; added: Blink
+                                                    'In_Bound': [marked], 'Stimuli_On': [stimuli_on], 'Out_Bounds_stim_On': [flag], 'Blink': [blinkStatus],'Saccade': [saccStatus]}, index=[0])  # 11/28; removed: 'Out_bounds_Stim_On':[flag]; added: Blink
+                        #print(current_row)
                         df_data = pd.concat(
                             [df_data, current_row], ignore_index=True)
 
                     except ValueError:
                         marked = 'A'
 
-            # 11/28: Make a Column of Blinked trials
-
-            for i in blinked_time:
-                # if blink happening = 1 based on blink timepoints
-                df_data.loc[df_data.time == i, 'Blink'] = 1
-
             # Clean up the data values -> make sure everything is a numeric ->
             # convert strings of words to 0s
-            df_data.trial = df_data.trial.convert_objects(convert_numeric=True)
+            df_data.trial = pd.to_numeric(df_data.trial)
+            #df_data.trial = df_data.trial.convert_objects(convert_numeric=True)
             df_data.x = df_data.x.convert_objects(convert_numeric=True)
             df_data.x = df_data.x.fillna(value=0)
             df_data.y = df_data.y.convert_objects(convert_numeric=True)
             df_data.y = df_data.y.fillna(value=0)
+            df_data.time = df_data.time.convert_objects(convert_numeric=True)
 
-            #Out_Bounds_stim_On = df_data.In_Bound & df_data.Stimuli_On
-            #df_data = pd.concat([df_data, Out_Bounds_stim_On], axis=1)
+            # loop through saccades that have blinks, convert all saccades to 0 and blinks to 1
+            for q in range(0,len(start_sacctotal)):
+                df_data.loc[(((df_data.time >= int(start_sacctotal[q])) & (df_data.time <= int(end_sacctotal[q])), 'Saccade'))] = 0
+                df_data.loc[(((df_data.time >= int(start_sacctotal[q])) & (df_data.time <= int(end_sacctotal[q])), 'Blink'))] = 1
 
             df_data.to_excel(dataFrameSaved, sheet_name=eye_track)
 
     dataFrameSaved.save()
+
     # print('end!')

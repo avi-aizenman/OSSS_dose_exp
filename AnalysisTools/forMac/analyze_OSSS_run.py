@@ -10,20 +10,7 @@ import csv
 import seaborn as sns
 from scipy.optimize import leastsq
 import ast
-
-# class Get_initials(tk.Tk):
-#     def __init__(self):
-#         tk.Tk.__init__(self)
-#         self.entry = tk.Entry(self)
-#         self.title("Subject Initials")
-#         self.button = tk.Button(self, text="Subject Initials:", command=self.on_button)
-#         self.button.pack()
-#         self.entry.pack()
-#
-#     def on_button(self):
-#         self.input = self.entry.get()
-#         self.quit()
-#
+import math
 
 
 def weib_fit(pars, x):
@@ -143,75 +130,113 @@ def correct_gaze():
 # doesn't finish this function plots raw ET data showing inner and outer
 # annulus
 def plot_eyetrack(dir_name, subject, date, all_runs):
-    outputBadTrials = open(dir_name + '/processed/' + subject + '_' + date + '_session' +
-                           session + '_BadTrials.csv', 'a+')  # Save proportion of bad data into csv file
-    outputBadTrialsCsv = csv.writer(outputBadTrials)
-    outputBadTrialsCsv.writerow(["SID", "Condition", "Total # samples", "Discarded Samples (stim off)",
-                                 "Stim on & no blink", "Bad Fixation Samples", "Proportion Bad Fixation Samples"])
+    # create a file that counts the # of "bad" trials in each block
+    CountBadTrials = open(dir_name + '/processed/' + subject + '_' + date + '_session' +
+                       session + '_CountBadTrials.csv', 'a+')  # Save proportion of bad data into csv file
+    CountBadTrialsCSV = csv.writer(CountBadTrials)
+    CountBadTrialsCSV.writerow(["SID", "Condition", "# Samples Exluded"])
+    # Create a file that keeps tabs on the quality of each trial
+    dataFrameSaved = pd.ExcelWriter(sub_folder + '/processed/' + current_subject +
+                                        '_' + date + '_session' + session + '_BadTrials.xlsx', engine='xlsxwriter')
     # load up some figures
     fig_all, ax_all = plt.subplots()
     subject_data = pd.ExcelFile(all_runs)
-
+    boxnum = 0
     labels = []
     num_runs = len(subject_data.sheet_names)
     colormap = plt.cm.gist_ncar
     plt.gca().set_color_cycle([colormap(i)
                                for i in np.linspace(0, 0.9, num_runs)])
+    Data2Plot = []
 
     for sheet in subject_data.sheet_names:
-        df_data = subject_data.parse(sheet)  # subject data
-        df_data = df_data[df_data.Blink == 0]  # subject data without blinks
-    # !!! Change this back
+        medianXall = []
+        medianYall = []
+        NumExclude = 0
+        final_col =["SID", "Trial","Condition", "Total # samples", "Discarded Samples (stim off)",
+                    "Stim on & no blink", "Bad Fixation Samples", "Proportion Bad Fixation Samples","Outlier X","Outlier Y","Trial Discarded"]
+        df_badtrial_data = pd.DataFrame([], columns=final_col)  # empty frame
+        plt.figure()
+        df_Alldata = subject_data.parse(sheet)  # subject data
+        df_data = df_Alldata[df_Alldata.Blink == 0]  # subject data without blinks
         df_stim_on = df_data  # subject data
         # subject data with stimuli on
         df_stim_on = df_stim_on[df_stim_on.Stimuli_On == 1]
-
-        #df_stim_on = df_stim_on[df_stim_on.Out_bounds_Stim_On == 0]
-
+        median_fixX = np.median(df_stim_on.x) # median accross all data in a block
+        median_fixY = np.median(df_stim_on.y) # median accross all data in a block
+        plt.ylim([0, 870])
+        plt.xlim([0, 1150])
         x_avg, y_avg = correct_gaze()  # get average displacements from previous function
-        # ax_all.
-        try_x = df_stim_on.x + x_avg
-        try_y = df_stim_on.y + y_avg / 2
-        # ax_all.
-        #plt.plot(df_stim_on.x, df_stim_on.y, '.', alpha=0.2, label=sheet)
-        plt.plot(try_x, try_y, '.', alpha=0.2, label=sheet)
+        annulus_Outer = plt.Circle(((1150 / 2), (869 / 2)), 79.25 * 2, color='r', fill=False)  # outer annulua
+        annulus_Inner = plt.Circle(((1150 / 2), (869 / 2)), 79.25, color='r', fill=False)  # inner anulus
+        plt.gca().add_artist(annulus_Outer)  # plots circle
+        plt.gca().add_artist(annulus_Inner)  # plots circle
+        plt.title(subject + ' Eyetrack'+ sheet)
+        maxXtotal = []
+        maxYtotal = []
+        badY = []
+        badX = []
 
-        labels.append(sheet)
+        for trialnum in range(0, max(df_data.trial)+1):
+            #Preliminary efforts to weed out bad trials. Proportion of time
+            #subject not properly fixating (# bad samples/ # total samples)
+            currTrial = df_data.loc[df_data['trial']== trialnum]
+            total = len(df_Alldata[df_Alldata.trial == trialnum]) # all samples
+            #discarded samples (stimuli not on or blinking)
+            samplesDiscarded = total - len(df_stim_on[df_stim_on.trial== trialnum])
+            #stimulus on and NOT fixating properly
+            outsideFix = len(currTrial.time[currTrial.Out_Bounds_stim_On == 1])
+            # proportion of time NOT fixating properly
+            pTimeBad = outsideFix / len(df_stim_on[df_stim_on.trial==trialnum])
+            currTrialET = df_stim_on.loc[df_stim_on['trial']== trialnum]
+            currTrialx = currTrialET.x
+            currTrialy = currTrialET.y
+            # keeps track of median x,y for each trial
+            median_fixX = np.median(currTrialx)
+            median_fixY = np.median(currTrialy)
+            medianXall.append(median_fixX)
+            medianYall.append(median_fixY)
+            # eye movement furthest away from center
+            dist = np.sqrt(((1150/2-currTrialx)**2+(870/2-currTrialy)**2))
+            maxDist = max(dist)
+            test = dist[dist == maxDist].index[0] # gets index of most extreme outlier for each trial
+            maxX = currTrialET.ix[int(test),7]
+            maxY = currTrialET.ix[int(test),8]
+            excludeDist =  np.sqrt(((median_fixX-maxX)**2+(median_fixY-maxY)**2))
+            if excludeDist>50:
+                exclude = 1
+                NumExclude = NumExclude+1
+                badY.append(maxY)
+                badX.append(maxX)
+            else:
+                exclude = 0
+                maxXtotal.append(maxX)
+                maxYtotal.append(maxY)
+            # saves information about each trial
+            current_row = pd.DataFrame({'SID': [subject], 'Trial': [trialnum], 'Condition': [sheet], 'Total # samples': [total],
+                            'Discarded Samples (stim off)': [samplesDiscarded], 'Stim on & no blink': [len(df_stim_on[df_stim_on.trial==trialnum])],
+                            'Bad Fixation Samples': [ outsideFix], 'Proportion Bad Fixation Samples': [pTimeBad],'Outlier X': [maxX],
+                            'Outlier Y': [maxY],'Trial Discarded': [exclude]}, index=[0])  # 11/28; removed: 'Out_bounds_Stim_On':[flag]; added: Blink
+            df_badtrial_data = pd.concat([df_badtrial_data, current_row], ignore_index=True)
 
-        # Preliminary efforts to weed out bad trials. Proportion of time
-        # subject not properly fixating (# bad samples/ # total samples)
-        total = len(subject_data.parse(sheet))  # all samples stimuli present
-        # discarded samples (stimuli not on)
-        samplesDiscarded = len(subject_data.parse(sheet)) - len(df_stim_on)
-        # stimulus on and NOT fixating properly
-        outsideFix = len(df_data.time[df_data.Out_Bounds_stim_On == 1])
-        # proportion of time NOT fixating properly
-        pTimeBad = outsideFix / len(df_stim_on)
-        outputBadTrialsCsv.writerow(
-            [subject, sheet, total, samplesDiscarded, len(df_stim_on), outsideFix, pTimeBad])
-
-    # ax_all
-#     plt.xlim([0, 1150])
-#     plt.ylim([0, 800])
-    plt.ylim([0, 870])
-    plt.xlim([0, 1150])
-    plt.plot((1150 / 2), (869 / 2), c='yellow', marker='*', markersize=25)
-    annulus_Outer = plt.Circle(
-        ((1150 / 2), (869 / 2)), 79.25 * 2, color='r', fill=False)  # outer annulua
-    annulus_Inner = plt.Circle(
-        ((1150 / 2), (869 / 2)), 79.25, color='r', fill=False)  # inner anulus
-    plt.gca().add_artist(annulus_Outer)  # plots circle
-    plt.gca().add_artist(annulus_Inner)  # plots circle
-
-    plt.gca().invert_yaxis()
-    plt.title(subject + ' Eyetrack')
-    plt.legend(labels, ncol=1, loc='upper left')
-    plt.savefig(dir_name + '/proccessed/' + subject + '_' +
-                date + '_session' + session + '_eyePosition.png')
+            # maxXtotal.append(maxX)
+            # maxYtotal.append(maxY)
+        # Plots median XY for each trial in blue, median accross all trials with a yellow star and max distance XY in red for each trial
+        plt.plot(medianXall, medianYall,'.',alpha=1,label=sheet)
+        plt.plot((median_fixX), (median_fixY), c='yellow', marker='*', markersize=6)
+        plt.plot(maxXtotal,maxYtotal,c='orange',marker='*',markersize = 6)
+        plt.plot(badX,badY,c='red',marker='*',markersize = 6)
+        plt.savefig(dir_name + '/processed/' + subject + '_' + date + '_session' + session +'_'+ sheet + '_eyePositionDeviation.png')
+        plt.gca().invert_yaxis()
+        plt.close()
+        sheetLabel = sheet[-4:]
+        df_badtrial_data.to_excel(dataFrameSaved, sheet_name=sheetLabel)
+        CountBadTrialsCSV.writerow([subject,sheet[-4:],NumExclude])
+    dataFrameSaved.save()
 
 
 def plot_psychophysical_performance(subject, date, dir_name, num_blocks):
-    output = open(dir_name + '/proccessed/' + subject + '_' + date + '_session' +
+    output = open(dir_name + '/processed/' + subject + '_' + date + '_session' +
                   session + '_ContrastThresholds.txt', 'a')  # Save Thresholds into a .txt file
     fig, axs = plt.subplots(2, 3, sharex=True, sharey=True)
     rm_fig, rm_axs = plt.subplots(2, 3, sharex=True, sharey=True)
@@ -224,7 +249,7 @@ def plot_psychophysical_performance(subject, date, dir_name, num_blocks):
 
     df_psy = pd.DataFrame([], columns=[
                           'condition', 'surround_contrast', 'surround', 'annulus', 'threshold_est'])
-    EyeData = pd.ExcelFile(dir_name + '/proccessed/' + subject +
+    EyeData = pd.ExcelFile(dir_name + '/processed/' + subject +
                            '_' + date + '_session' + session + '_master_file.xlsx')
 
     for fn in os.listdir(dir_name):
@@ -557,7 +582,7 @@ def plot_psychophysical_performance(subject, date, dir_name, num_blocks):
     fig.text(0.5, 0.04, 'Target contrast - annulus contrast', ha='center')
     fig.text(0.04, 0.5, 'Percentage correct', va='center', rotation='vertical')
     fig.set_size_inches(12.5, 9.5)
-    fig.savefig('%s.png' % (dir_name + '/proccessed/' + subject +
+    fig.savefig('%s.png' % (dir_name + '/processed/' + subject +
                             '_' + date + '_session' + session + '_FittedThresholdsWeibull'))
     fig.show()
 
@@ -567,13 +592,13 @@ def plot_psychophysical_performance(subject, date, dir_name, num_blocks):
     rm_fig.text(0.04, 0.5, 'Percentage correct',
                 va='center', rotation='vertical')
     rm_fig.set_size_inches(12.5, 9.5)
-    rm_fig.savefig('%s.png' % (dir_name + '/proccessed/' + subject + '_' +
+    rm_fig.savefig('%s.png' % (dir_name + '/processed/' + subject + '_' +
                                date + '_session' + session + '_RemovedFittedThresholdWeibull'))
     rm_fig.show()
 
     fig_result.text(0.5, 0.04, 'Correct or Incorrect', ha='center')
     fig_result.text(0.04, 0.5, 'Proportion', va='center', rotation='vertical')
-    fig_result.savefig(dir_name + '/proccessed/' + subject + '_' +
+    fig_result.savefig(dir_name + '/processed/' + subject + '_' +
                        date + '_session' + session + '_BehavioralPerformance.png')
     fig_result.set_size_inches(12.5, 9.5)
     fig_result.show()
@@ -581,24 +606,17 @@ def plot_psychophysical_performance(subject, date, dir_name, num_blocks):
     fig_cont.text(0.5, 0.04, 'trial number', ha='center')  # figure handle
     fig_cont.text(0.04, 0.5, 'Target Contrast',
                   va='center', rotation='vertical')
-    fig_cont.savefig(dir_name + '/proccessed/' + subject +
+    fig_cont.savefig(dir_name + '/processed/' + subject +
                      '_' + date + '_session' + session + '_TargetContrast.png')
     fig_cont.set_size_inches(12.5, 9.5)
     fig_cont.show()
 
-
-# What variables are needed for this to run?
-# subject
-# date
-# dir_name
-
-
 if __name__ == "__main__":
     # Get subject name and folder to analyze:
     # sub_folder = tkFileDialog.askdirectory()
-
     sub_folder = sys.argv[1]
     current_subject = sys.argv[2]
+
 
     date, sep, session = sub_folder.rpartition("_")
     date = date[-8:]
@@ -614,12 +632,13 @@ if __name__ == "__main__":
     guess = 0.5  # The guessing rate is 0.5
     flake = 0.99
     slope = 3.5
+    all_runs = sub_folder + '/processed/' + current_subject + \
+        '_' + date + '_session' + session + '_master_file.xlsx'
+    plot_eyetrack(sub_folder, current_subject, date, all_runs)
     plot_psychophysical_performance(
         current_subject, date, sub_folder, num_blocks)  # only uses this function
-    all_runs = sub_folder + '/proccessed/' + current_subject + \
-        '_' + date + '_session' + session + '_master_file.xlsx'
 
-    #plot_eyetrack('/'+sub_folder+'/proccessed', current_subject, date, all_runs)
-    plot_eyetrack(sub_folder, current_subject, date, all_runs)
+
+    #plot_eyetrack('/'+sub_folder+'/processed', current_subject, date, all_runs)
 
     print('end all!')
